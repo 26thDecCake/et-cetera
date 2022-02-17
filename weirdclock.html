@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Document</title>
+    <style>
+        html, body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+canvas {
+  width: 100%;
+  height: 100%;
+}
+    </style>
+</head>
+<body>
+    <canvas id="render"></canvas>
+    <script>
+        const canvas = document.getElementById("render");
+const context = canvas.getContext('2d');
+
+const toggleTime = 300; // 300ms
+
+class Easing {
+  static easeInOutQuad(x) {
+    return x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2;
+  }
+
+  static easeOutBounce(x) {
+    const n1 = 7.5625;
+    const d1 = 2.75;
+    
+    if (x < 1 / d1) {
+        return n1 * x * x;
+    } else if (x < 2 / d1) {
+        return n1 * (x -= 1.5 / d1) * x + 0.75;
+    } else if (x < 2.5 / d1) {
+        return n1 * (x -= 2.25 / d1) * x + 0.9375;
+    } else {
+        return n1 * (x -= 2.625 / d1) * x + 0.984375;
+    }
+  }
+
+  static easeInOutBounce(x) {
+    return x < 0.5
+      ? (1 - Easing.easeOutBounce(1 - 2 * x)) / 2
+      : (1 + Easing.easeOutBounce(2 * x - 1)) / 2;
+  }
+
+  static easeInOutCirc(x) {
+    return x < 0.5
+      ? (1 - Math.sqrt(1 - Math.pow(2 * x, 2))) / 2
+      : (Math.sqrt(1 - Math.pow(-2 * x + 2, 2)) + 1) / 2;
+  }
+}
+
+class RGB {
+  static clamp(value, min, max) {
+    if (value < min)
+      return min;
+    if (value > max)
+      return max;
+    return value;
+  }
+
+  constructor(r, g, b) {
+    this.r = RGB.clamp(r, 0, 255);
+    this.g = RGB.clamp(g, 0, 255);
+    this.b = RGB.clamp(b, 0, 255);
+  }
+
+  toString() {
+    return `rgb(${this.r}, ${this.g}, ${this.b})`;
+  }
+
+  clone() {
+    return new RGB(this.r, this.g, this.b);
+  }
+};
+
+class RGBA extends RGB {
+  constructor(r, g, b, a = 1) {
+    super(r, g, b);
+    this.a = RGB.clamp(a, 0, 1);
+  }
+
+  toString() {
+    return `rgba(${this.r}, ${this.g}, ${this.b}, ${this.a})`;
+  }
+
+  clone() {
+    return new RGBA(this.r, this.g, this.b, this.a);
+  }
+};
+
+class Annotation {
+  constructor(text, side, color) {
+    this.text = text;
+    this.side = side;
+    this.color = color.clone();
+  }
+
+  render(context, position, size) {
+    context.save();
+    
+    context.font = (size / 2) + "px sans-serif";
+
+    if (this.side === "right" || this.side === "left") {
+      context.fillStyle = this.color.toString();
+      context.textBaseline = "middle";
+      context.textAlign = this.side === "right" ? "left" : "right";
+      context.fillText(this.text, position.x + (this.side === "right" ? size : -size), position.y);
+    } else if (this.side === "top" || this.side === "bottom") {
+      context.translate(position.x, position.y);
+      context.rotate(-(Math.PI / 2));
+      context.translate(-position.x, -position.y);
+      context.fillStyle = this.color.toString();
+      context.textBaseline = "middle";
+      context.textAlign = this.side === "top" ? "left" : "right";
+      context.fillText(this.text, position.x + (this.side === "top" ? size : -size), position.y);      
+    }
+
+    context.restore();
+  }
+};
+
+class BinaryNumber {
+  constructor(value, valueWidth, color, index, total, annotations) {
+    this.value = [];
+    this.old = [];
+    this.cols = [];
+    this.anno = annotations || {};
+
+    for (let i = 0; i < valueWidth; ++i) {
+      this.value.push(0);
+      this.old.push(0);
+      this.cols.push(color.clone());
+    }
+
+    this.valueWidth = valueWidth;
+    this.setValue(value);
+    
+    this.bitSize = 30;
+    this.bitSpacing = 10;
+    this.color = color;
+    this.index = index;
+    this.total = total;
+    this.width = (total * this.bitSize) + ((total - 1) * this.bitSpacing);
+    this.height = (this.value.length * this.bitSize) + ((this.value.length - 1) * this.bitSpacing);
+    this.offset = (this.index * this.bitSize) + (this.index * this.bitSpacing);
+    this.future = 0;
+    this.past = 0;
+  }
+  
+  setValue(value) {
+    this.old    = [...this.value];
+    this.value  = [...value.toString(2)].map(v => +v);
+    this.future = (new Date()).getTime() + toggleTime;
+
+    if (this.value.length > this.valueWidth)
+      throw TypeError("invalid value width provided");
+
+    for (let i = this.value.length; i < this.valueWidth; ++i)
+      this.value.unshift(0);
+
+    if (this.value.length !== this.old.length || this.value.length != this.cols.length)
+      throw TypeError("catastrophic failure"); 
+  }
+  
+  step() {
+    let now = (new Date()).getTime();
+    let delta = 1;
+
+    if (now < this.future) {
+      delta = (this.future - now) / toggleTime;
+    } else {
+      return;
+    }
+
+    for (let index in this.value) {
+      let value = this.value[index];
+      let old   = this.old[index];
+      let color = this.cols[index];
+
+      if (value === old) {
+        color.a = (value === 1) ? 1 : 0;
+        continue;
+      }
+
+      delta = Easing.easeInOutQuad(delta);
+
+      color.a = (value > old) ? (1 - delta) : (delta);
+    }
+  }
+  
+  render(context) {
+    let position = {
+      x: Math.floor(((context.canvas.width / 2) - (this.width / 2)) + this.offset),
+      y: Math.floor(((context.canvas.height / 2) - (this.height / 2)) + this.height)
+    };
+
+    context.save();
+
+    for (let index = this.value.length - 1; index >= 0; --index) {
+        let value = this.value[index];
+        let color = this.cols[index];
+        let offColor = color.clone();
+        offColor.a = .1;
+
+        context.beginPath();
+        context.fillStyle = offColor.toString();
+        context.arc(position.x, position.y, this.bitSize / 2, 0, 2*Math.PI,true);
+        context.fill();
+        context.closePath();
+
+        if (value === 1) {
+          let shadowColor = color.clone();
+          context.save();
+
+          context.shadowBlur = 15;
+          context.shadowColor = shadowColor.toString();
+
+          let gradient = context.createRadialGradient(
+            position.x, position.y, 2, position.x, position.y, this.bitSize / 2);
+          gradient.addColorStop(0, color.clone().toString());
+          gradient.addColorStop(1, new RGBA(color.r - 50, color.g - 50, color.b - 50, color.a).toString());
+
+          context.beginPath();
+          context.fillStyle = gradient;
+          context.arc(position.x, position.y, this.bitSize / 2, 0, 2*Math.PI,true);
+          context.fill();
+          context.closePath();
+
+          context.restore();
+        }
+        
+        if (index in this.anno)
+          this.anno[index].forEach(anno => anno.render(context, position, this.bitSize));
+
+        position.y -= (this.bitSize + this.bitSpacing);
+    }
+    
+    context.restore();
+  }
+};
+
+function updateBinaryValues(numberArray) {
+  let today = new Date();
+  numberArray[0].setValue(+today.getYear().toString().substr(-2));
+  numberArray[1].setValue(today.getMonth() + 1);
+  numberArray[2].setValue(today.getDate());
+  numberArray[3].setValue(today.getHours());
+  numberArray[4].setValue(today.getMinutes());
+  numberArray[5].setValue(today.getSeconds());
+}
+
+const annotationColor = new RGBA(50, 50, 50, 1);
+
+// // https://www.schemecolor.com/rainbow-pastels-color-scheme.php
+// const yearColor = new RGBA(255, 154, 162);
+// const monthColor = new RGBA(255, 183, 178);
+// const dayColor = new RGBA(255, 218, 193);
+// const hourColor = new RGBA(226, 240, 203);
+// const minuteColor = new RGBA(181, 234, 215);
+// const secondColor = new RGBA(199, 206, 234);
+
+// https://www.schemecolor.com/pastel-rainbow.php
+const yearColor = new RGBA(204, 153, 201);
+const monthColor = new RGBA(158, 193, 207);
+const dayColor = new RGBA(158, 224, 158);
+const hourColor = new RGBA(253, 253, 151);
+const minuteColor = new RGBA(254, 177, 68);
+const secondColor = new RGBA(255, 102, 99);
+
+
+let numbers = [
+  new BinaryNumber(0, 6, yearColor, 0, 6, {
+    5: [
+      new Annotation("1", "left", annotationColor),
+      new Annotation("Year", "bottom", annotationColor)
+    ],
+    4: [new Annotation("2", "left", annotationColor)],
+    3: [new Annotation("4", "left", annotationColor)],
+    2: [new Annotation("8", "left", annotationColor)],
+    1: [new Annotation("16", "left", annotationColor)],
+    0: [
+      new Annotation("32", "left", annotationColor),
+      new Annotation("Year", "top", annotationColor)
+    ],
+  }),
+  new BinaryNumber(0, 6, monthColor, 1, 6, {
+    5: [new Annotation("Month", "bottom", annotationColor)],
+    0: [new Annotation("Month", "top", annotationColor)]
+  }),
+  new BinaryNumber(0, 6, dayColor, 2, 6, {
+    5: [new Annotation("Day", "bottom", annotationColor)],
+    0: [new Annotation("Day", "top", annotationColor)]
+  }),
+  new BinaryNumber(0, 6, hourColor, 3, 6, {
+    5: [new Annotation("Hour", "bottom", annotationColor)],
+    0: [new Annotation("Hour", "top", annotationColor)]
+  }),
+  new BinaryNumber(0, 6, minuteColor, 4, 6, {
+    5: [new Annotation("Minute", "bottom", annotationColor)],
+    0: [new Annotation("Minute", "top", annotationColor)]
+  }),
+  new BinaryNumber(0, 6, secondColor, 5, 6, {
+    5: [
+      new Annotation("1", "right", annotationColor),
+      new Annotation("Second", "bottom", annotationColor)
+    ],
+    4: [new Annotation("2", "right", annotationColor)],
+    3: [new Annotation("4", "right", annotationColor)],
+    2: [new Annotation("8", "right", annotationColor)],
+    1: [new Annotation("16", "right", annotationColor)],
+    0: [
+      new Annotation("32", "right", annotationColor),
+      new Annotation("Second", "top", annotationColor)
+    ],
+  })
+];
+
+function renderLoop() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  
+  context.fillStyle = 'black';
+  context.beginPath();
+  context.rect(0, 0, canvas.width, canvas.height);
+  context.fill();
+  context.closePath();
+
+  for (let index in numbers) {
+      let number = numbers[index]; 
+      number.step();
+      number.render(context);
+  }
+  
+  requestAnimationFrame(renderLoop);
+}
+
+function main() {
+
+  setInterval(() => {
+    updateBinaryValues(numbers);
+  }, 1000);
+
+  requestAnimationFrame(renderLoop);
+}
+
+window.addEventListener('load', main);
+    </script>
+</body>
+</html>
